@@ -146,7 +146,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    webhook_url = WEBHOOK_HOST + WEBHOOK_PATH
+    webhook_url = "https://lify-ai-telegram-chat.onrender.com/webhook"
     print(f"📡 Запуск Webhook на {webhook_url}")
 
     app.run_webhook(

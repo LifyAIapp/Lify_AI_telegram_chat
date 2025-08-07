@@ -6,18 +6,27 @@ import asyncio
 from telegram import Update
 from telegram.ext import (
     Application,
+    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     ContextTypes,
     filters
 )
 from threading import Thread
+from dotenv import load_dotenv
 
-# Хранилище user_id → JWT токен (можно заменить на БД)
-user_tokens = {}
+load_dotenv()
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # напр. https://lify-ai-chat.onrender.com
+WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook")
+PORT = int(os.environ.get("PORT", 8443))
 
 API_BASE_URL = "https://api.totothemoon.site/api"
 POLLING_INTERVAL = 5  # секунд
+
+# Хранилище user_id → JWT токен (можно заменить на БД)
+user_tokens = {}
 
 # Приветственное сообщение
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -33,19 +42,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-    # 1. Если токен ещё не сохранён — сохранить его
     if user_id not in user_tokens:
-        if len(text.split(".")) == 3:  # простая проверка на JWT
+        if len(text.split(".")) == 3:
             user_tokens[user_id] = text
             await update.message.reply_text("✅ Токен сохранён! Теперь можешь писать сообщения.")
         else:
             await update.message.reply_text(
                 "🔑 Пришли мне свой telegram токен (JWT), который ты получил в приложении.\n\n"
-                "💡 Просто вставь его сюда — без слова `Bearer`."
+                "💡 Просто вставь его сюда — без слова `Bearer`.",
+                parse_mode="Markdown"
             )
         return
 
-    # 2. Отправить сообщение в /Chat
     jwt_token = user_tokens[user_id]
     headers = {
         "Content-Type": "application/json",
@@ -64,13 +72,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text("🕐 Обрабатываю запрос...")
 
-        # 3. Запускаем фоновый опрос
         Thread(target=poll_for_response, args=(user_id, message_id, context, jwt_token)).start()
 
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
-# Фоновый опрос до смены статуса
 def poll_for_response(user_id, message_id, context, jwt_token):
     headers = {
         "Content-Type": "application/json",
@@ -85,14 +91,13 @@ def poll_for_response(user_id, message_id, context, jwt_token):
                 return
 
             data = resp.json()
-            if data["type"] != 1:  # 1 = Processing
+            if data["type"] != 1:
                 break
             time.sleep(POLLING_INTERVAL)
         except Exception as e:
             send_message(context, user_id, f"❌ Ошибка: {str(e)}")
             return
 
-    # 4. Получить последний ответ от AI
     try:
         final_resp = requests.get(f"{API_BASE_URL}/Chat/Count/1/0", headers=headers)
         if final_resp.status_code != 200:
@@ -103,8 +108,7 @@ def poll_for_response(user_id, message_id, context, jwt_token):
         ai_type = latest["type"]
         msg_text = latest["message"]
 
-        # 5. Обработка ConfirmRequest
-        if ai_type == 2:  # ConfirmRequest
+        if ai_type == 2:
             try:
                 parsed = json.loads(msg_text)
                 formatted = format_confirm_request(parsed)
@@ -117,7 +121,6 @@ def poll_for_response(user_id, message_id, context, jwt_token):
     except Exception as e:
         send_message(context, user_id, f"❌ Ошибка получения финального ответа: {str(e)}")
 
-# Упрощённый форматтер ConfirmRequest
 def format_confirm_request(data):
     name = data.get("Name", "???")
     attributes = data.get("Attributes", [])
@@ -130,24 +133,29 @@ def format_confirm_request(data):
 
     return "\n".join(result)
 
-# Асинхронная отправка сообщения
 def send_message(context, user_id, text):
     loop = asyncio.get_event_loop()
     loop.create_task(context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown"))
 
-# Запуск бота
-def main():
-    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not TELEGRAM_BOT_TOKEN:
-        print("❌ Не найден TELEGRAM_BOT_TOKEN в .env")
+async def main():
+    if not TELEGRAM_BOT_TOKEN or not WEBHOOK_HOST:
+        print("❌ Не заданы переменные TELEGRAM_BOT_TOKEN и/или WEBHOOK_HOST в .env")
         return
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    print("🤖 Бот запущен")
-    app.run_polling()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    webhook_url = WEBHOOK_HOST + WEBHOOK_PATH
+    print(f"📡 Запуск Webhook на {webhook_url}")
+
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=WEBHOOK_PATH,
+        webhook_url=webhook_url
+    )
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -5,7 +5,6 @@ import requests
 import asyncio
 from telegram import Update
 from telegram.ext import (
-    Application,
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
@@ -25,10 +24,10 @@ PORT = int(os.environ.get("PORT", 8443))
 API_BASE_URL = "https://api.totothemoon.site/api"
 POLLING_INTERVAL = 5  # секунд
 
-# Хранилище user_id → JWT токен (можно заменить на БД)
+# Хранилище user_id → JWT токен
 user_tokens = {}
 
-# Приветственное сообщение
+# Стартовое сообщение
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я — Telegram-чат для твоего приложения Lify AI.\n\n"
@@ -37,7 +36,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-# Основная обработка сообщений
+# Обработка сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
@@ -77,6 +76,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
+# Ожидание смены статуса
 def poll_for_response(user_id, message_id, context, jwt_token):
     headers = {
         "Content-Type": "application/json",
@@ -125,32 +125,31 @@ def format_confirm_request(data):
     name = data.get("Name", "???")
     attributes = data.get("Attributes", [])
     result = [f"*{name}*"]
-
     for attr in attributes:
         key = attr.get("Key", "")
         value = attr.get("Value", "")
         result.append(f"*{key}*: {value}")
-
     return "\n".join(result)
 
 def send_message(context, user_id, text):
     loop = asyncio.get_event_loop()
     loop.create_task(context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown"))
 
-async def main():
+# Основной запуск без asyncio.run()
+def main():
     if not TELEGRAM_BOT_TOKEN or not WEBHOOK_HOST:
         print("❌ Не заданы переменные TELEGRAM_BOT_TOKEN и/или WEBHOOK_HOST в .env")
         return
 
-    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     webhook_url = WEBHOOK_HOST + WEBHOOK_PATH
     print(f"📡 Запуск Webhook на {webhook_url}")
 
-    application.run_webhook(
+    app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path=WEBHOOK_PATH,
@@ -158,4 +157,4 @@ async def main():
     )
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

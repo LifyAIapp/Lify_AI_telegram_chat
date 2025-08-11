@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # например: https://lify-ai-telegram-chat.onrender.com
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook")
 PORT = int(os.environ.get("PORT", 8443))
 
@@ -71,7 +71,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text("🕐 Обрабатываю запрос...")
 
-        Thread(target=poll_for_response, args=(user_id, message_id, context, jwt_token)).start()
+        Thread(target=poll_for_response, args=(user_id, message_id, context, jwt_token), daemon=True).start()
 
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
@@ -91,13 +91,14 @@ def poll_for_response(user_id, message_id, context, jwt_token):
                 return
 
             data = resp.json()
-            if data["type"] != 1:
+            if data.get("type") != 1:  # 1 = Processing
                 break
             time.sleep(POLLING_INTERVAL)
         except Exception as e:
             send_message(context, user_id, f"❌ Ошибка: {str(e)}")
             return
 
+    # Получить последний ответ
     try:
         final_resp = requests.get(f"{API_BASE_URL}/Chat/Count/1/0", headers=headers)
         if final_resp.status_code != 200:
@@ -105,10 +106,11 @@ def poll_for_response(user_id, message_id, context, jwt_token):
             return
 
         latest = final_resp.json()[0]
-        ai_type = latest["type"]
-        msg_text = latest["message"]
+        ai_type = latest.get("type")
+        msg_text = latest.get("message", "")
 
         if ai_type == 2:
+            # ConfirmRequest
             try:
                 parsed = json.loads(msg_text)
                 formatted = format_confirm_request(parsed)
@@ -131,7 +133,7 @@ def format_confirm_request(data):
         result.append(f"*{key}*: {value}")
     return "\n".join(result)
 
-# ✅ Фикс для event loop в потоках
+# ✅ Отправка сообщений из потоков в основной event loop приложения
 def send_message(context, user_id, text):
     asyncio.run_coroutine_threadsafe(
         context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown"),
@@ -144,18 +146,19 @@ def main():
         print("❌ Не заданы переменные TELEGRAM_BOT_TOKEN и/или WEBHOOK_HOST в .env")
         return
 
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    # Нормализуем путь вебхука
+    path = WEBHOOK_PATH if WEBHOOK_PATH.startswith("/") else f"/{WEBHOOK_PATH}"
+    webhook_url = f"{WEBHOOK_HOST.rstrip('/')}{path}"
 
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    webhook_url = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
     print(f"📡 Запуск Webhook на {webhook_url}")
-
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        url_path=WEBHOOK_PATH,
+        url_path=path,
         webhook_url=webhook_url
     )
 

@@ -17,15 +17,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "").rstrip("/")
-WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "webhook").lstrip("/")
-PORT = int(os.environ.get("PORT", "10000"))
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
+WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook")
+PORT = int(os.environ.get("PORT", 8443))
 
-API_BASE_URL = os.getenv("API_BASE_URL", "https://api.totothemoon.site/api")
+API_BASE_URL = "https://api.totothemoon.site/api"
 POLLING_INTERVAL = 5  # секунд
 
+# Хранилище user_id → JWT токен
 user_tokens = {}
 
+# Стартовое сообщение
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я — Telegram-чат для твоего приложения Lify AI.\n\n"
@@ -34,6 +36,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+# Обработка сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
@@ -73,6 +76,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
+# Ожидание смены статуса
 def poll_for_response(user_id, message_id, context, jwt_token):
     headers = {
         "Content-Type": "application/json",
@@ -127,20 +131,25 @@ def format_confirm_request(data):
         result.append(f"*{key}*: {value}")
     return "\n".join(result)
 
+# ✅ Фикс для event loop в потоках
 def send_message(context, user_id, text):
-    loop = asyncio.get_event_loop()
-    loop.create_task(context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown"))
+    asyncio.run_coroutine_threadsafe(
+        context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown"),
+        context.application.loop
+    )
 
+# Основной запуск
 def main():
     if not TELEGRAM_BOT_TOKEN or not WEBHOOK_HOST:
         print("❌ Не заданы переменные TELEGRAM_BOT_TOKEN и/или WEBHOOK_HOST в .env")
         return
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    webhook_url = f"{WEBHOOK_HOST}/{WEBHOOK_PATH}"
+    webhook_url = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
     print(f"📡 Запуск Webhook на {webhook_url}")
 
     app.run_webhook(

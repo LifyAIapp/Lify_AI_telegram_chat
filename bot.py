@@ -71,7 +71,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text("🕐 Обрабатываю запрос...")
 
-        Thread(target=poll_for_response, args=(user_id, message_id, context, jwt_token), daemon=True).start()
+        Thread(
+            target=poll_for_response,
+            args=(user_id, message_id, context, jwt_token),
+            daemon=True
+        ).start()
 
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
@@ -133,11 +137,10 @@ def format_confirm_request(data):
         result.append(f"*{key}*: {value}")
     return "\n".join(result)
 
-# ✅ Отправка сообщений из потоков в основной event loop приложения
+# ✅ Потокобезопасная отправка сообщений (через Application.create_task)
 def send_message(context, user_id, text):
-    asyncio.run_coroutine_threadsafe(
-        context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown"),
-        context.application.loop
+    context.application.create_task(
+        context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown")
     )
 
 # Основной запуск
@@ -159,7 +162,8 @@ def main():
         listen="0.0.0.0",
         port=PORT,
         url_path=path,
-        webhook_url=webhook_url
+        webhook_url=webhook_url,
+        drop_pending_updates=True
     )
 
 if __name__ == "__main__":

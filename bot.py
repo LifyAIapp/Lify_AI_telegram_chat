@@ -55,10 +55,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Content-Type": "application/json",
         "Authorization": f"Bearer {jwt_token}"
     }
+
+    user_id_str = f"tg:{str(user_id)}"  # строго строкой
     payload = {
         "Message": text,
         "Attributes": {
-            "userIds": [f"tg:{user_id}"]
+            "userIds": [user_id_str]
         }
     }
 

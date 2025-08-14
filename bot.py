@@ -128,15 +128,29 @@ async def poll_for_response(user_id, message_id, application, jwt_token):
     except Exception as e:
         await application.bot.send_message(chat_id=user_id, text=f"❌ Ошибка: {str(e)}")
 
-# Форматирование ConfirmRequest
+# ✅ Форматирование ConfirmRequest
 def format_confirm_request(data):
     name = data.get("Name", "???")
-    attributes = data.get("Attributes", [])
+    attributes = data.get("Attributes", {})
+
     result = [f"*{name}*"]
-    for attr in attributes:
-        key = attr.get("Key", "")
-        value = attr.get("Value", "")
-        result.append(f"*{key}*: {value}")
+
+    if isinstance(attributes, list):
+        for attr in attributes:
+            key = attr.get("Key", "")
+            value = attr.get("Value", "")
+            result.append(f"*{key}*: {value}")
+    elif isinstance(attributes, dict):
+        for key, value in attributes.items():
+            if isinstance(value, dict):
+                result.append(f"*{key}*:")
+                for subkey, subval in value.items():
+                    result.append(f"• `{subkey}` → {subval}")
+            else:
+                result.append(f"*{key}*: {value}")
+    else:
+        result.append(f"`{json.dumps(attributes, indent=2)}`")
+
     return "\n".join(result)
 
 # Основной запуск

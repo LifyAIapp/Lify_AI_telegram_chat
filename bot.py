@@ -1,6 +1,5 @@
 import json
 import os
-import time
 import requests
 import asyncio
 from telegram import Update
@@ -11,7 +10,6 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
-from threading import Thread
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,20 +20,20 @@ WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook")
 PORT = int(os.environ.get("PORT", 8443))
 
 API_BASE_URL = "https://api.totothemoon.site/api"
-POLLING_INTERVAL = 5  # секунд
+POLLING_INTERVAL = 5  # seconds
 
-user_tokens = {}  # user_id -> JWT token
+# Хранилище user_id → JWT токен
+user_tokens = {}
 
-# /start
+# Стартовое сообщение
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я — Telegram-чат для твоего приложения Lify AI.\n\n"
         "Чтобы связать аккаунт, пришли мне свой telegram токен, который находится в твоем профиле в приложении.\n\n"
-        "💡 Просто скопируй и вставь его — и сможешь писать сообщения.",
-        parse_mode="Markdown"
+        "💡 Просто скопируй и вставь его — и сможешь писать сообщения."
     )
 
-# обработка текста
+# Обработка сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
@@ -67,7 +65,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         post_response = requests.post(f"{API_BASE_URL}/Chat", headers=headers, json=payload)
         if post_response.status_code != 200:
-            await update.message.reply_text(f"❌ Ошибка при отправке сообщения: {post_response.text}")
+            await update.message.reply_text(f"❌ Ошибка: {post_response.text}")
             return
 
         chat_msg = post_response.json()
@@ -75,41 +73,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text("🕐 Обрабатываю запрос...")
 
-        Thread(
-            target=poll_for_response,
-            args=(user_id, message_id, context.bot, jwt_token),
-            daemon=True
-        ).start()
+        # Запускаем фоновую async-задачу
+        context.application.create_task(
+            poll_for_response(user_id, message_id, context.application, jwt_token)
+        )
 
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
-# ожидание ответа
-def poll_for_response(user_id, message_id, bot, jwt_token):
+# Ожидание ответа
+async def poll_for_response(user_id, message_id, application, jwt_token):
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {jwt_token}"
     }
 
-    try:
-        while True:
+    while True:
+        try:
             resp = requests.get(f"{API_BASE_URL}/Chat/{message_id}", headers=headers)
             if resp.status_code != 200:
-                send_message(bot, user_id, f"❌ Ошибка при проверке статуса: {resp.text}")
+                await application.bot.send_message(chat_id=user_id, text=f"❌ Ошибка: {resp.text}")
                 return
 
             data = resp.json()
             if data.get("type") != 1:
                 break
-            time.sleep(POLLING_INTERVAL)
-    except Exception as e:
-        send_message(bot, user_id, f"❌ Ошибка: {str(e)}")
-        return
+            await asyncio.sleep(POLLING_INTERVAL)
+        except Exception as e:
+            await application.bot.send_message(chat_id=user_id, text=f"❌ Ошибка: {str(e)}")
+            return
 
     try:
         final_resp = requests.get(f"{API_BASE_URL}/Chat/Count/1/0", headers=headers)
         if final_resp.status_code != 200:
-            send_message(bot, user_id, f"❌ Ошибка при получении ответа: {final_resp.text}")
+            await application.bot.send_message(chat_id=user_id, text=f"❌ Ошибка: {final_resp.text}")
             return
 
         latest = final_resp.json()[0]
@@ -120,16 +117,16 @@ def poll_for_response(user_id, message_id, bot, jwt_token):
             try:
                 parsed = json.loads(msg_text)
                 formatted = format_confirm_request(parsed)
-                send_message(bot, user_id, f"🤖 Подтверждение:\n\n{formatted}")
+                await application.bot.send_message(chat_id=user_id, text=f"🤖 Подтверждение:\n\n{formatted}", parse_mode="Markdown")
             except Exception:
-                send_message(bot, user_id, f"🤖 (ConfirmRequest, но не удалось разобрать JSON):\n{msg_text}")
+                await application.bot.send_message(chat_id=user_id, text=f"🤖 ConfirmRequest, но не удалось разобрать JSON:\n{msg_text}")
         else:
-            send_message(bot, user_id, f"🤖 Ответ:\n{msg_text}")
+            await application.bot.send_message(chat_id=user_id, text=f"🤖 Ответ:\n{msg_text}")
 
     except Exception as e:
-        send_message(bot, user_id, f"❌ Ошибка получения финального ответа: {str(e)}")
+        await application.bot.send_message(chat_id=user_id, text=f"❌ Ошибка: {str(e)}")
 
-# форматирование ConfirmRequest
+# Форматирование ConfirmRequest
 def format_confirm_request(data):
     name = data.get("Name", "???")
     attributes = data.get("Attributes", [])
@@ -140,20 +137,10 @@ def format_confirm_request(data):
         result.append(f"*{key}*: {value}")
     return "\n".join(result)
 
-# безопасная отправка
-def send_message(bot, user_id, text):
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    loop.call_soon_threadsafe(asyncio.create_task, bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown"))
-
-# запуск
+# Основной запуск
 def main():
     if not TELEGRAM_BOT_TOKEN or not WEBHOOK_HOST:
-        print("❌ Не заданы переменные TELEGRAM_BOT_TOKEN и/или WEBHOOK_HOST в .env")
+        print("❌ .env не заполнен!")
         return
 
     path = WEBHOOK_PATH if WEBHOOK_PATH.startswith("/") else f"/{WEBHOOK_PATH}"
@@ -163,7 +150,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print(f"📡 Запуск Webhook на {webhook_url}")
+    print(f"📡 Запуск webhook: {webhook_url}")
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,

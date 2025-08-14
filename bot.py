@@ -17,15 +17,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # например: https://lify-ai-telegram-chat.onrender.com
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook")
 PORT = int(os.environ.get("PORT", 8443))
 
 API_BASE_URL = "https://api.totothemoon.site/api"
 POLLING_INTERVAL = 5  # секунд
 
+# Хранилище user_id → JWT токен
 user_tokens = {}
 
+# Стартовое сообщение
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я — Telegram-чат для твоего приложения Lify AI.\n\n"
@@ -34,6 +36,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+# Обработка сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
@@ -75,14 +78,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         Thread(
             target=poll_for_response,
-            args=(user_id, message_id, context, jwt_token),
+            args=(user_id, message_id, context.application, jwt_token),
             daemon=True
         ).start()
 
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
-def poll_for_response(user_id, message_id, context, jwt_token):
+# Ожидание смены статуса
+def poll_for_response(user_id, message_id, app, jwt_token):
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {jwt_token}"
@@ -92,21 +96,22 @@ def poll_for_response(user_id, message_id, context, jwt_token):
         try:
             resp = requests.get(f"{API_BASE_URL}/Chat/{message_id}", headers=headers)
             if resp.status_code != 200:
-                send_message(context, user_id, f"❌ Ошибка при проверке статуса: {resp.text}")
+                send_message(app, user_id, f"❌ Ошибка при проверке статуса: {resp.text}")
                 return
 
             data = resp.json()
-            if data.get("type") != 1:
+            if data.get("type") != 1:  # 1 = Processing
                 break
             time.sleep(POLLING_INTERVAL)
         except Exception as e:
-            send_message(context, user_id, f"❌ Ошибка: {str(e)}")
+            send_message(app, user_id, f"❌ Ошибка: {str(e)}")
             return
 
+    # Получить последний ответ
     try:
         final_resp = requests.get(f"{API_BASE_URL}/Chat/Count/1/0", headers=headers)
         if final_resp.status_code != 200:
-            send_message(context, user_id, f"❌ Ошибка при получении ответа: {final_resp.text}")
+            send_message(app, user_id, f"❌ Ошибка при получении ответа: {final_resp.text}")
             return
 
         latest = final_resp.json()[0]
@@ -117,14 +122,14 @@ def poll_for_response(user_id, message_id, context, jwt_token):
             try:
                 parsed = json.loads(msg_text)
                 formatted = format_confirm_request(parsed)
-                send_message(context, user_id, f"🤖 Подтверждение:\n\n{formatted}")
+                send_message(app, user_id, f"🤖 Подтверждение:\n\n{formatted}")
             except Exception:
-                send_message(context, user_id, f"🤖 (ConfirmRequest, но не удалось разобрать JSON):\n{msg_text}")
+                send_message(app, user_id, f"🤖 (ConfirmRequest, но не удалось разобрать JSON):\n{msg_text}")
         else:
-            send_message(context, user_id, f"🤖 Ответ:\n{msg_text}")
+            send_message(app, user_id, f"🤖 Ответ:\n{msg_text}")
 
     except Exception as e:
-        send_message(context, user_id, f"❌ Ошибка получения финального ответа: {str(e)}")
+        send_message(app, user_id, f"❌ Ошибка получения финального ответа: {str(e)}")
 
 def format_confirm_request(data):
     name = data.get("Name", "???")
@@ -136,12 +141,15 @@ def format_confirm_request(data):
         result.append(f"*{key}*: {value}")
     return "\n".join(result)
 
-def send_message(context, user_id, text):
+# ✅ Потокобезопасная отправка сообщений
+def send_message(app, user_id, text):
+    loop = asyncio.get_event_loop()
     asyncio.run_coroutine_threadsafe(
-        context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown"),
-        context.application._loop
+        app.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown"),
+        loop
     )
 
+# Основной запуск
 def main():
     if not TELEGRAM_BOT_TOKEN or not WEBHOOK_HOST:
         print("❌ Не заданы переменные TELEGRAM_BOT_TOKEN и/или WEBHOOK_HOST в .env")

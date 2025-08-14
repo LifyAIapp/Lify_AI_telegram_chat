@@ -3,7 +3,7 @@ import os
 import time
 import requests
 import asyncio
-from telegram import Update, Bot
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -17,20 +17,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # например: https://lify-ai-telegram-chat.onrender.com
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook")
 PORT = int(os.environ.get("PORT", 8443))
 
 API_BASE_URL = "https://api.totothemoon.site/api"
 POLLING_INTERVAL = 5  # секунд
 
-# Глобальный event loop
-TELEGRAM_LOOP = None
+user_tokens = {}  # user_id -> JWT token
 
-# Хранилище user_id → JWT токен
-user_tokens = {}
-
-# Стартовое сообщение
+# /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я — Telegram-чат для твоего приложения Lify AI.\n\n"
@@ -39,7 +35,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-# Обработка сообщений
+# обработка текста
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
@@ -81,40 +77,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         Thread(
             target=poll_for_response,
-            args=(user_id, message_id, jwt_token),
+            args=(user_id, message_id, context.bot, jwt_token),
             daemon=True
         ).start()
 
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
-# Ожидание смены статуса
-def poll_for_response(user_id, message_id, jwt_token):
+# ожидание ответа
+def poll_for_response(user_id, message_id, bot, jwt_token):
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {jwt_token}"
     }
 
-    while True:
-        try:
+    try:
+        while True:
             resp = requests.get(f"{API_BASE_URL}/Chat/{message_id}", headers=headers)
             if resp.status_code != 200:
-                send_message(user_id, f"❌ Ошибка при проверке статуса: {resp.text}")
+                send_message(bot, user_id, f"❌ Ошибка при проверке статуса: {resp.text}")
                 return
 
             data = resp.json()
-            if data.get("type") != 1:  # 1 = Processing
+            if data.get("type") != 1:
                 break
             time.sleep(POLLING_INTERVAL)
-        except Exception as e:
-            send_message(user_id, f"❌ Ошибка: {str(e)}")
-            return
+    except Exception as e:
+        send_message(bot, user_id, f"❌ Ошибка: {str(e)}")
+        return
 
-    # Получить последний ответ
     try:
         final_resp = requests.get(f"{API_BASE_URL}/Chat/Count/1/0", headers=headers)
         if final_resp.status_code != 200:
-            send_message(user_id, f"❌ Ошибка при получении ответа: {final_resp.text}")
+            send_message(bot, user_id, f"❌ Ошибка при получении ответа: {final_resp.text}")
             return
 
         latest = final_resp.json()[0]
@@ -125,16 +120,16 @@ def poll_for_response(user_id, message_id, jwt_token):
             try:
                 parsed = json.loads(msg_text)
                 formatted = format_confirm_request(parsed)
-                send_message(user_id, f"🤖 Подтверждение:\n\n{formatted}")
+                send_message(bot, user_id, f"🤖 Подтверждение:\n\n{formatted}")
             except Exception:
-                send_message(user_id, f"🤖 (ConfirmRequest, но не удалось разобрать JSON):\n{msg_text}")
+                send_message(bot, user_id, f"🤖 (ConfirmRequest, но не удалось разобрать JSON):\n{msg_text}")
         else:
-            send_message(user_id, f"🤖 Ответ:\n{msg_text}")
+            send_message(bot, user_id, f"🤖 Ответ:\n{msg_text}")
 
     except Exception as e:
-        send_message(user_id, f"❌ Ошибка получения финального ответа: {str(e)}")
+        send_message(bot, user_id, f"❌ Ошибка получения финального ответа: {str(e)}")
 
-# Форматирование ConfirmRequest
+# форматирование ConfirmRequest
 def format_confirm_request(data):
     name = data.get("Name", "???")
     attributes = data.get("Attributes", [])
@@ -145,24 +140,22 @@ def format_confirm_request(data):
         result.append(f"*{key}*: {value}")
     return "\n".join(result)
 
-# Отправка сообщений из потока
-def send_message(user_id, text):
-    bot = Bot(token=TELEGRAM_BOT_TOKEN)
-    asyncio.run_coroutine_threadsafe(
-        bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown"),
-        TELEGRAM_LOOP
-    )
+# безопасная отправка
+def send_message(bot, user_id, text):
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
-# Основной запуск
+    loop.call_soon_threadsafe(asyncio.create_task, bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown"))
+
+# запуск
 def main():
-    global TELEGRAM_LOOP
-    TELEGRAM_LOOP = asyncio.get_event_loop()
-
     if not TELEGRAM_BOT_TOKEN or not WEBHOOK_HOST:
         print("❌ Не заданы переменные TELEGRAM_BOT_TOKEN и/или WEBHOOK_HOST в .env")
         return
 
-    # Нормализуем путь вебхука
     path = WEBHOOK_PATH if WEBHOOK_PATH.startswith("/") else f"/{WEBHOOK_PATH}"
     webhook_url = f"{WEBHOOK_HOST.rstrip('/')}{path}"
 

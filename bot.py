@@ -17,17 +17,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # например: https://lify-ai-telegram-chat.onrender.com
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook")
 PORT = int(os.environ.get("PORT", 8443))
 
 API_BASE_URL = "https://api.totothemoon.site/api"
 POLLING_INTERVAL = 5  # секунд
 
-# Хранилище user_id → JWT токен
 user_tokens = {}
 
-# Стартовое сообщение
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я — Telegram-чат для твоего приложения Lify AI.\n\n"
@@ -36,7 +34,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-# Обработка сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
@@ -85,7 +82,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
-# Ожидание смены статуса
 def poll_for_response(user_id, message_id, context, jwt_token):
     headers = {
         "Content-Type": "application/json",
@@ -100,14 +96,13 @@ def poll_for_response(user_id, message_id, context, jwt_token):
                 return
 
             data = resp.json()
-            if data.get("type") != 1:  # 1 = Processing
+            if data.get("type") != 1:
                 break
             time.sleep(POLLING_INTERVAL)
         except Exception as e:
             send_message(context, user_id, f"❌ Ошибка: {str(e)}")
             return
 
-    # Получить последний ответ
     try:
         final_resp = requests.get(f"{API_BASE_URL}/Chat/Count/1/0", headers=headers)
         if final_resp.status_code != 200:
@@ -119,13 +114,12 @@ def poll_for_response(user_id, message_id, context, jwt_token):
         msg_text = latest.get("message", "")
 
         if ai_type == 2:
-            # ConfirmRequest
             try:
                 parsed = json.loads(msg_text)
                 formatted = format_confirm_request(parsed)
                 send_message(context, user_id, f"🤖 Подтверждение:\n\n{formatted}")
             except Exception:
-                send_message(context, user_id, f"🤖 Ответ:\n{msg_text}")
+                send_message(context, user_id, f"🤖 (ConfirmRequest, но не удалось разобрать JSON):\n{msg_text}")
         else:
             send_message(context, user_id, f"🤖 Ответ:\n{msg_text}")
 
@@ -142,13 +136,12 @@ def format_confirm_request(data):
         result.append(f"*{key}*: {value}")
     return "\n".join(result)
 
-# Потокобезопасная отправка сообщений
 def send_message(context, user_id, text):
-    context.application.create_task(
-        context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown")
+    asyncio.run_coroutine_threadsafe(
+        context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown"),
+        context.application._loop
     )
 
-# Основной запуск
 def main():
     if not TELEGRAM_BOT_TOKEN or not WEBHOOK_HOST:
         print("❌ Не заданы переменные TELEGRAM_BOT_TOKEN и/или WEBHOOK_HOST в .env")

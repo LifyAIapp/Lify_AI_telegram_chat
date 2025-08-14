@@ -58,7 +58,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Content-Type": "application/json",
         "Authorization": f"Bearer {jwt_token}"
     }
-    payload = {"Message": text}
+    payload = {
+    "Message": text,
+    "Attributes": {
+        "userIds": [f"tg:{user_id}"]   # или просто [str(user_id)]
+    }
+}
+
+
 
     try:
         post_response = requests.post(f"{API_BASE_URL}/Chat", headers=headers, json=payload)

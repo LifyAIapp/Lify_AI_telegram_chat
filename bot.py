@@ -59,13 +59,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Authorization": f"Bearer {jwt_token}"
     }
     payload = {
-    "Message": text,
-    "Attributes": {
-        "userIds": [f"tg:{user_id}"]   # или просто [str(user_id)]
+        "Message": text,
+        "Attributes": {
+            "userIds": [f"tg:{user_id}"]
+        }
     }
-}
-
-
 
     try:
         post_response = requests.post(f"{API_BASE_URL}/Chat", headers=headers, json=payload)
@@ -127,7 +125,7 @@ def poll_for_response(user_id, message_id, context, jwt_token):
                 formatted = format_confirm_request(parsed)
                 send_message(context, user_id, f"🤖 Подтверждение:\n\n{formatted}")
             except Exception:
-                send_message(context, user_id, f"🤖 (ConfirmRequest, но не удалось разобрать JSON):\n{msg_text}")
+                send_message(context, user_id, f"🤖 Ответ:\n{msg_text}")
         else:
             send_message(context, user_id, f"🤖 Ответ:\n{msg_text}")
 
@@ -144,7 +142,7 @@ def format_confirm_request(data):
         result.append(f"*{key}*: {value}")
     return "\n".join(result)
 
-# ✅ Потокобезопасная отправка сообщений (через Application.create_task)
+# Потокобезопасная отправка сообщений
 def send_message(context, user_id, text):
     context.application.create_task(
         context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown")
@@ -156,7 +154,6 @@ def main():
         print("❌ Не заданы переменные TELEGRAM_BOT_TOKEN и/или WEBHOOK_HOST в .env")
         return
 
-    # Нормализуем путь вебхука
     path = WEBHOOK_PATH if WEBHOOK_PATH.startswith("/") else f"/{WEBHOOK_PATH}"
     webhook_url = f"{WEBHOOK_HOST.rstrip('/')}{path}"
 
